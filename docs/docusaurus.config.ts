@@ -4,6 +4,7 @@ import remarkCodeImport from "remark-code-import";
 import remarkTemplate from "./plugins/remark-template";
 import llmsTxtPlugin from "./plugins/llms-txt-plugin";
 import daggerApiReference from "./plugins/dagger-api-reference";
+import remarkApiModel from "./plugins/dagger-api-reference/remark";
 import path from "path";
 import { daggerPrismTheme } from "./src/prism/theme";
 
@@ -149,6 +150,7 @@ const config: Config = {
               },
             ],
             [remarkTemplate, { version: daggerVersion }],
+            [remarkApiModel, { siteDir: __dirname }],
           ],
         },
         blog: false,

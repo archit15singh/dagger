@@ -1,11 +1,11 @@
 import React from "react";
 import Link from "@docusaurus/Link";
-import { useApiModel, useTypeHref } from "./data";
+import { useTypeHref } from "./data";
+import type { ApiModel } from "./data";
 import { MarkdownInline } from "./Markdown";
 import styles from "./styles.module.scss";
 
-export default function ApiTypeList(): JSX.Element {
-  const model = useApiModel();
+export default function ApiTypeList({ model }: { model: ApiModel }): JSX.Element {
   const typeHref = useTypeHref();
   const typeNames = [...model.coreTypes].sort((a, b) => a.localeCompare(b));
 

@@ -1,6 +1,7 @@
 import path from "path";
 import versions from "../../versions.json";
 import type { LoadContext, Plugin } from "@docusaurus/types";
+import type { ApiModel } from "../../src/components/api/data";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { parseSchema } = require("./schema.js");
@@ -15,16 +16,13 @@ export type DaggerApiOptions = {
 };
 
 /**
- * dagger-api-reference parses each docs version's core GraphQL schema at build
- * time and exposes the models as plugin global data. The reference React
- * components (src/components/api) read it via usePluginData, so the published
- * reference is generated straight from the schema — the same idea as Dang's
- * stdlib generator, done the Docusaurus-native way.
+ * Build one schema module per docs version. The API reference MDX imports its
+ * own version's model, keeping the schemas out of site-wide JavaScript.
  */
 export default function daggerApiReference(
   context: LoadContext,
   options: DaggerApiOptions = {}
-): Plugin<unknown> {
+): Plugin<Record<string, ApiModel>> {
   const schemaPath = path.resolve(
     context.siteDir,
     options.schemaPath ?? "docs-graphql/schema.graphqls"
@@ -46,7 +44,11 @@ export default function daggerApiReference(
       );
     },
     async contentLoaded({ content, actions }) {
-      actions.setGlobalData(content);
+      await Promise.all(
+        Object.entries(content).map(([version, model]) =>
+          actions.createData(`${version}.json`, JSON.stringify(model))
+        )
+      );
     },
     getPathsToWatch() {
       return Object.values(schemaPaths);

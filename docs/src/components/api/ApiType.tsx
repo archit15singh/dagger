@@ -1,6 +1,13 @@
 import React from "react";
 import Link from "@docusaurus/Link";
-import { orderedApiFields, useApiModel, useApiType, useTypeHref } from "./data";
+import {
+  ApiModelContext,
+  orderedApiFields,
+  useApiModel,
+  useApiType,
+  useTypeHref,
+} from "./data";
+import type { ApiModel } from "./data";
 import Markdown from "./Markdown";
 import FieldIndex from "./FieldIndex";
 import FieldCard from "./FieldCard";
@@ -42,9 +49,19 @@ function ImplementsLine({ names }: { names: string[] }): JSX.Element | null {
  */
 export default function ApiType({
   name,
+  model,
 }: {
   name: string;
+  model: ApiModel;
 }): JSX.Element {
+  return (
+    <ApiModelContext.Provider value={model}>
+      <ApiTypeContent name={name} />
+    </ApiModelContext.Provider>
+  );
+}
+
+function ApiTypeContent({ name }: { name: string }): JSX.Element {
   const type = useApiType(name);
   const fields = orderedApiFields(type.fields);
   return (

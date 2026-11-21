@@ -1,7 +1,6 @@
-import { usePluginData } from "@docusaurus/useGlobalData";
+import { createContext, useContext } from "react";
 import {
   useActiveVersion,
-  useDocsVersion,
   useVersions,
 } from "@docusaurus/plugin-content-docs/client";
 
@@ -92,12 +91,12 @@ export interface ApiModel {
   coreTypes: string[];
 }
 
+export const ApiModelContext = createContext<ApiModel | null>(null);
+
 export function useApiModel(): ApiModel {
-  const { version } = useDocsVersion();
-  const models = usePluginData("dagger-api-reference") as Partial<Record<string, ApiModel>>;
-  const model = models[version];
+  const model = useContext(ApiModelContext);
   if (!model) {
-    throw new Error(`No API schema for docs version "${version}"`);
+    throw new Error("No Dagger API schema provided");
   }
   return model;
 }
