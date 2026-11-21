@@ -23,6 +23,17 @@ function renderMarkdown(html: string, source: URL, markdown: TurndownService): s
   if (!article.length) throw new Error(`No rendered documentation at ${source}`);
 
   article.find(".hash-link, script, style").remove();
+  // Keep labels attached to the examples when the interactive tabs are flattened.
+  article.find("[role=tablist]").each((_, node) => {
+    const tabs = $(node);
+    const labels = tabs.children("[role=tab]").map((_, tab) => $(tab).text()).get();
+    const panels = tabs.next().children("[role=tabpanel]");
+    if (!labels.length || labels.length !== panels.length) return;
+    panels.each((index, panel) => {
+      $(panel).prepend($("<p>").append($("<strong>").text(labels[index])));
+    });
+    tabs.remove();
+  });
   article.find("a[href], img[src]").each((_, node) => {
     const element = $(node);
     const attr = node.tagName === "a" ? "href" : "src";
@@ -32,7 +43,7 @@ function renderMarkdown(html: string, source: URL, markdown: TurndownService): s
       return;
     }
     const url = new URL(value, source);
-    if (/\.mdx$/i.test(url.pathname)) {
+    if (/\.mdx$/i.test(decodeURIComponent(url.pathname))) {
       throw new Error(`Unresolved documentation source link in ${source}: ${value}`);
     }
     element.attr(attr, url.href);
@@ -101,6 +112,7 @@ export default function llmsTxtPlugin({ siteConfig, baseUrl }: LoadContext): Plu
         const filename = path.join(outDir, route, "index.html");
         const html = await fs.readFile(filename, "utf8");
         const body = renderMarkdown(html, source, markdown);
+        if (!body.trim()) throw new Error(`Empty rendered documentation at ${source}`);
         if (/^[ \t]*`{3,}[^\n]*\bfile=\S+/m.test(body)) {
           throw new Error(`Unexpanded snippet directive in ${source}`);
         }
