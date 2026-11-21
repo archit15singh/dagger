@@ -93,11 +93,11 @@ export interface ApiModel {
 }
 
 export function useApiModel(): ApiModel {
-  const { name } = useDocsVersion();
+  const { version } = useDocsVersion();
   const models = usePluginData("dagger-api-reference") as Partial<Record<string, ApiModel>>;
-  const model = models[name];
+  const model = models[version];
   if (!model) {
-    throw new Error(`No API schema for docs version "${name}"`);
+    throw new Error(`No API schema for docs version "${version}"`);
   }
   return model;
 }
