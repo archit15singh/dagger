@@ -127,6 +127,7 @@ func (d DocsDev) GenerateVersion(
 	}
 	result = result.
 		WithDirectory(versionDir, built.Directory(generatedDir)).
+		WithFile(versionDir+"/schema.graphqls", sourceDocs.File("docs-graphql/schema.graphqls")).
 		WithFile(sidebar, built.File(generatedSidebar))
 	if !exists {
 		contents, err := built.File("docs/versions.json").Contents(ctx)

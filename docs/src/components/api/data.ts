@@ -1,6 +1,7 @@
 import { usePluginData } from "@docusaurus/useGlobalData";
 import {
   useActiveVersion,
+  useDocsVersion,
   useVersions,
 } from "@docusaurus/plugin-content-docs/client";
 
@@ -92,7 +93,13 @@ export interface ApiModel {
 }
 
 export function useApiModel(): ApiModel {
-  return usePluginData("dagger-api-reference") as ApiModel;
+  const { name } = useDocsVersion();
+  const models = usePluginData("dagger-api-reference") as Partial<Record<string, ApiModel>>;
+  const model = models[name];
+  if (!model) {
+    throw new Error(`No API schema for docs version "${name}"`);
+  }
+  return model;
 }
 
 export function useApiType(name: string): ApiType {
@@ -158,9 +165,8 @@ export function useTypeHref(): (name: string) => string {
     if (activeVersionDoc) {
       return activeVersionDoc.path;
     }
-    // The schema model is shared across versions. A newly added type may
-    // only have a page in the current docs, so use an existing page before
-    // constructing a URL in a snapshot that predates the type.
+    // Some snapshots have no page for a type. Prefer a known route before
+    // constructing a URL for it.
     const fallbackDoc = versions
       .flatMap((version) => version.docs)
       .find((doc) => docIds.includes(doc.id));
