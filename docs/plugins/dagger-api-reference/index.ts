@@ -50,6 +50,25 @@ export default function daggerApiReference(
         )
       );
     },
+    configureWebpack(_config, isServer) {
+      if (isServer) return {};
+      // Every API page in a version shares one model. Keep it out of both
+      // the site-wide bundle and the individual page chunks.
+      const cacheGroups = Object.fromEntries(
+        Object.keys(schemaPaths).map((version) => {
+          const name = `dagger-api-schema-${version}`;
+          const filename = `${version}.json`.replace(/[.]/g, "\\.");
+          return [name, {
+            test: new RegExp(`[/\\\\]dagger-api-reference[/\\\\]default[/\\\\]${filename}$`),
+            name,
+            chunks: "async",
+            priority: 60,
+            enforce: true,
+          }];
+        })
+      );
+      return { optimization: { splitChunks: { cacheGroups } } };
+    },
     getPathsToWatch() {
       return Object.values(schemaPaths);
     },
