@@ -15,10 +15,10 @@ import DocVersionBanner from "@theme/DocVersionBanner";
 import TOC from "@theme/TOC";
 import type { Props } from "@theme/DocItem/Layout";
 import {
+  ApiModelContext,
   orderedApiFields,
   typeDocPrefixes,
   typeSlug,
-  useApiModel,
 } from "@site/src/components/api/data";
 
 import styles from "./styles.module.css";
@@ -41,7 +41,7 @@ function useApiReferenceTOC(
   minHeadingLevel?: number,
   maxHeadingLevel?: number
 ): DocTOC {
-  const model = useApiModel();
+  const types = React.useContext(ApiModelContext)?.types;
   const { pathname } = useLocation();
   const resolvedMin = minHeadingLevel ?? DEFAULT_MIN_HEADING_LEVEL;
   const resolvedMax = maxHeadingLevel ?? DEFAULT_MAX_HEADING_LEVEL;
@@ -51,7 +51,7 @@ function useApiReferenceTOC(
       (item) => item.level >= resolvedMin && item.level <= resolvedMax
     );
     const path = normalizePath(pathname);
-    const currentType = Object.values(model.types).find((type) =>
+    const currentType = Object.values(types ?? {}).find((type) =>
       typeDocPrefixes.some((prefix) =>
         path.endsWith(`/${prefix}/${typeSlug(type.name)}`)
       )
@@ -89,7 +89,7 @@ function useApiReferenceTOC(
   }, [
     maxHeadingLevel,
     minHeadingLevel,
-    model.types,
+    types,
     pathname,
     resolvedMax,
     resolvedMin,

@@ -1,26 +1,26 @@
 import path from "path";
 import type { Root } from "mdast";
-import type { MdxJsxFlowElement, MdxJsxTextElement, MdxjsEsm } from "mdast-util-mdx";
+import type { MdxjsEsm } from "mdast-util-mdx";
 import type { VFile } from "vfile";
-import { visit } from "unist-util-visit";
+import { EXIT, visit } from "unist-util-visit";
 import versions from "../../versions.json";
 
-const modelName = "daggerApiModel";
-
-function modelImport(version: string): MdxjsEsm {
+function modelExport(version: string): MdxjsEsm {
   const source = `@generated/dagger-api-reference/default/${version}.json`;
   return {
     type: "mdxjsEsm",
-    value: `import ${modelName} from "${source}";`,
+    value: `export { default as daggerApiModel } from "${source}";`,
     data: {
       estree: {
         type: "Program",
         sourceType: "module",
         body: [{
-          type: "ImportDeclaration",
+          type: "ExportNamedDeclaration",
+          declaration: null,
           specifiers: [{
-            type: "ImportDefaultSpecifier",
-            local: { type: "Identifier", name: modelName },
+            type: "ExportSpecifier",
+            local: { type: "Identifier", name: "default" },
+            exported: { type: "Identifier", name: "daggerApiModel" },
           }],
           source: { type: "Literal", value: source },
         }],
@@ -31,13 +31,14 @@ function modelImport(version: string): MdxjsEsm {
 
 export default function remarkApiModel({ siteDir }: { siteDir: string }) {
   return (tree: Root, file: VFile) => {
-    const apiElements: (MdxJsxFlowElement | MdxJsxTextElement)[] = [];
+    let usesApiModel = false;
     visit(tree, ["mdxJsxFlowElement", "mdxJsxTextElement"], (node) => {
       if (node.name === "ApiType" || node.name === "ApiTypeList") {
-        apiElements.push(node);
+        usesApiModel = true;
+        return EXIT;
       }
     });
-    if (apiElements.length === 0) return;
+    if (!usesApiModel) return;
 
     const [directory, versionDir] = path.relative(siteDir, file.path).split(path.sep);
     const version = directory === "current_docs"
@@ -49,26 +50,6 @@ export default function remarkApiModel({ siteDir }: { siteDir: string }) {
       throw new Error(`Cannot select a Dagger API schema for ${file.path}`);
     }
 
-    tree.children.unshift(modelImport(version));
-    for (const node of apiElements) {
-      node.attributes.push({
-        type: "mdxJsxAttribute",
-        name: "model",
-        value: {
-          type: "mdxJsxAttributeValueExpression",
-          value: modelName,
-          data: {
-            estree: {
-              type: "Program",
-              sourceType: "module",
-              body: [{
-                type: "ExpressionStatement",
-                expression: { type: "Identifier", name: modelName },
-              }],
-            },
-          },
-        },
-      });
-    }
+    tree.children.unshift(modelExport(version));
   };
 }
