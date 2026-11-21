@@ -49,8 +49,11 @@
     "@docusaurus/tsconfig": "^3.9.2",
     "@docusaurus/types": "^3.5.2",
     "@types/node": "^25.5",
+    "@types/turndown": "^5.0.6",
     "cheerio": "^1.0.0",
-    "markdownlint-cli": "^0.48.0"
+    "markdownlint-cli": "^0.48.0",
+    "turndown": "^7.2.5",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "browserslist": {
     "production": [

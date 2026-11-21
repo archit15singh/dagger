@@ -1,222 +1,143 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { Plugin } from '@docusaurus/types';
+import type { LoadContext, Plugin } from "@docusaurus/types";
+import type { LoadedContent, LoadedVersion } from "@docusaurus/plugin-content-docs";
+import { load } from "cheerio";
+import TurndownService from "turndown";
+import { gfm } from "turndown-plugin-gfm";
 
-type Options = {
-  docsPath?: string;
-};
+type SidebarItem = LoadedVersion["sidebars"][string][number];
 
-type MdxFile = {
-  fullPath: string;
-  title: string;
-  fallbackUrlPath: string;
-  body: string;
-};
+function sidebarDocIds(items: SidebarItem[]): string[] {
+  return items.flatMap((item) => {
+    if (item.type === "doc" || item.type === "ref") return [item.id];
+    if (item.type !== "category") return [];
+    const id = item.link?.type === "doc" ? [item.link.id] : [];
+    return [...id, ...sidebarDocIds(item.items)];
+  });
+}
+
+function renderMarkdown(html: string, source: URL, markdown: TurndownService): string {
+  const $ = load(html);
+  const article = $("article .theme-doc-markdown").first();
+  if (!article.length) throw new Error(`No rendered documentation at ${source}`);
+
+  article.find(".hash-link, script, style").remove();
+  article.find("a[href], img[src]").each((_, node) => {
+    const element = $(node);
+    const attr = node.tagName === "a" ? "href" : "src";
+    const value = element.attr(attr);
+    if (!value?.trim()) {
+      element.removeAttr(attr);
+      return;
+    }
+    const url = new URL(value, source);
+    if (/\.mdx$/i.test(url.pathname)) {
+      throw new Error(`Unresolved documentation source link in ${source}: ${value}`);
+    }
+    element.attr(attr, url.href);
+  });
+
+  // Prism renders each line in its own span with no intervening newline.
+  article.find("pre > code").each((_, node) => {
+    const code = $(node);
+    const pre = code.parent();
+    const language = [pre.attr("class"), pre.parent().attr("class")]
+      .map((className) => className?.match(/(?:^|\s)language-([^\s]+)/)?.[1])
+      .find(Boolean);
+    const lines = code.children(".token-line");
+    if (lines.length) {
+      code.text(lines.map((_, line) => $(line).text()).get().join("\n").replaceAll("\u200b", ""));
+    }
+    if (language) code.attr("class", `language-${language}`);
+  });
+
+  return markdown.turndown(article.html() ?? "");
+}
+
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
 
 // Thanks to @jharrell and Prisma team. Apache-2.0 content
 // https://github.com/prisma/docs/commit/bc5b452b34ebdce8e89ccbe0c7f029e8b6ef1239
-const llmsTxtPlugin = async function pluginLlmsTxt(
-  context,
-  options: Options = {}
-): Promise<Plugin> {
+export default function llmsTxtPlugin({ siteConfig, baseUrl }: LoadContext): Plugin {
   return {
     name: "llms-txt-plugin",
-    loadContent: async () => {
-      const { siteDir } = context;
-      const contentDir = path.resolve(siteDir, options.docsPath ?? "current_docs");
-      const allMdx: MdxFile[] = [];
-
-      // recursive function to get all mdx files
-      const getMdxFiles = async (dir: string) => {
-        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            await getMdxFiles(fullPath);
-          } else if (entry.name.endsWith(".mdx")) {
-            const content = await fs.promises.readFile(fullPath, "utf8");
-
-            // extract title from frontmatter if it exists
-            const titleMatch = content.match(
-              /^---\n(?:.*\n)*?title:\s*["']?([^"'\n]+)["']?\n(?:.*\n)*?---\n/
-            );
-            const title = titleMatch ? titleMatch[1] : "";
-
-            // Get the relative path for URL construction
-            const relativePath = path.relative(contentDir, fullPath);
-
-            // Convert file path to URL path by:
-            // 1. Removing numeric prefixes (like 100-, 01-, etc.)
-            // 2. Removing the .mdx extension
-            // This is only a fallback for files that are not docs (partials);
-            // docs use their permalink, resolved in postBuild.
-            let urlPath = relativePath
-              .replace(/^\d+-/, "")
-              .replace(/\/\d+-/g, "/")
-              .replace(/\.mdx$/, "");
-
-            // strip frontmatter
-            const contentWithoutFrontmatter = content.replace(/^---\n[\s\S]*?\n---\n/, "");
-
-            allMdx.push({
-              fullPath,
-              title,
-              fallbackUrlPath: `/${urlPath}`,
-              body: contentWithoutFrontmatter,
-            });
-          }
-        }
-      };
-
-      await getMdxFiles(contentDir);
-      return { allMdx };
-    },
-    postBuild: async ({ content, routes, outDir, plugins }) => {
-      const { allMdx } = content as { allMdx: MdxFile[] };
-      const { siteDir, siteConfig } = context;
-
-      // Docs are served at their `slug`, which need not match their file
-      // path. current_docs is also served at /next, while the newest release
-      // snapshot is served at the root. Link each doc to the root copy when
-      // the release has it, and to the /next copy otherwise.
-      type DocMetadata = { id: string; source: string; permalink: string };
-      type LoadedVersion = { versionName: string; isLast: boolean; docs: DocMetadata[] };
+    async postBuild({ outDir, plugins }) {
+      // Docusaurus exposes other plugins' postBuild content without its generic type.
       const docsContent = plugins.find(
-        (plugin) => plugin.name === "docusaurus-plugin-content-docs"
-      )?.content as { loadedVersions?: LoadedVersion[] } | undefined;
-      const loadedVersions = docsContent?.loadedVersions ?? [];
-      const rootPermalinks = new Map<string, string>(
-        loadedVersions
-          .find((version) => version.isLast)
-          ?.docs.map((doc): [string, string] => [doc.id, doc.permalink])
-      );
-      const permalinkById = new Map<string, string>();
-      const permalinkByFile = new Map<string, string>();
-      for (const doc of loadedVersions.find((version) => version.versionName === "current")?.docs ?? []) {
-        const permalink = rootPermalinks.get(doc.id) ?? doc.permalink;
-        permalinkById.set(doc.id, permalink);
-        permalinkByFile.set(path.resolve(siteDir, doc.source.replace(/^@site\//, "")), permalink);
-      }
+        (plugin) => plugin.name === "docusaurus-plugin-content-docs",
+      )?.content as LoadedContent | undefined;
+      const current = docsContent?.loadedVersions.find((version) => version.versionName === "current");
+      if (!current?.docs.length) throw new Error("No current docs for the LLM exports");
+      const stable = docsContent?.loadedVersions.find((version) => version.isLast);
+      const stableById = new Map(stable?.docs.map((doc) => [doc.id, doc]));
+      const currentById = new Map(current.docs.map((doc) => [doc.id, doc]));
 
-      // combine title and content with URL
-      const fullMdx = allMdx.map(({ fullPath, title, fallbackUrlPath, body }) => {
-        const fullUrl = `${siteConfig.url}${permalinkByFile.get(fullPath) ?? fallbackUrlPath}`;
-        return title ? `# ${title}\n\nURL: ${fullUrl}\n${body}` : body;
+      // Preserve the reading order of the sidebar, then append unlinked docs.
+      const ids = new Set([
+        ...Object.values(current.sidebars).flatMap(sidebarDocIds),
+        ...[...currentById.keys()].sort((a, b) => a.localeCompare(b)),
+      ]);
+      const docs = [...ids].flatMap((id) => {
+        const doc = currentById.get(id);
+        return doc ? [stableById.get(id) ?? doc] : [];
       });
 
-      // Write concatenated MDX content
-      const concatenatedPath = path.join(outDir, "llms-full.txt");
-      await fs.promises.writeFile(concatenatedPath, fullMdx.join("\n---\n\n"));
+      const site = new URL(baseUrl, siteConfig.url);
+      const markdown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" }).use(gfm);
+      const sources = new Set<string>();
+      const pages = [];
+      for (const doc of docs) {
+        const source = new URL(doc.permalink, site);
+        if (source.origin !== site.origin || !source.pathname.startsWith(site.pathname)) {
+          throw new Error(`Documentation source is outside the site: ${source}`);
+        }
+        if (sources.has(source.href)) throw new Error(`Duplicate documentation route: ${source}`);
+        sources.add(source.href);
 
-      // we need to dig down several layers:
-      // find PluginRouteConfig marked by plugin.name === "docusaurus-plugin-content-docs"
-      const docsPluginRouteConfig = routes.filter(
-        (route) => route.plugin.name === "docusaurus-plugin-content-docs"
-      )[0];
-
-      // docsPluginRouteConfig has a routes property has a record with the path "/" that contains all docs routes.
-      const allDocsRouteConfig =
-        docsPluginRouteConfig.routes?.find((route) => {
-          const version = route.props?.version as { name?: string; versionName?: string } | undefined;
-          return version?.name === "current" || version?.versionName === "current";
-        }) ??
-        docsPluginRouteConfig.routes?.filter(
-          (route) => route.path === "/"
-        )[0];
-
-      // A little type checking first
-      if (!allDocsRouteConfig?.props?.version) {
-        return;
+        const route = decodeURIComponent(source.pathname.slice(site.pathname.length));
+        const filename = path.join(outDir, route, "index.html");
+        const html = await fs.readFile(filename, "utf8");
+        const body = renderMarkdown(html, source, markdown);
+        if (/^[ \t]*`{3,}[^\n]*\bfile=\S+/m.test(body)) {
+          throw new Error(`Unexpanded snippet directive in ${source}`);
+        }
+        pages.push({
+          title: singleLine(doc.title),
+          description: singleLine(doc.description),
+          source: source.href,
+          lastUpdated: doc.lastUpdatedAt
+            ? new Date(doc.lastUpdatedAt).toISOString().slice(0, 10)
+            : undefined,
+          body,
+        });
       }
 
-      // this route config has a `props` property that contains the current documentation.
-      const versionProps = allDocsRouteConfig.props.version as Record<string, unknown>;
-      const currentVersionDocsRoutes = versionProps.docs as Record<
-        string,
-        Record<string, unknown>
-      >;
+      // The index and corpus use the same ordered pages, with one record per unique route.
+      const corpusUrl = new URL("llms-full.txt", site);
+      const index = pages.map(({ title, description, source }) => {
+        const label = title.replace(/[\\\[\]]/g, "\\$&");
+        return `- [${label}](<${source}>)${description ? `: ${description}` : ""}`;
+      });
+      const corpus = pages.map(({ title, description, source, lastUpdated, body }) => [
+        "---",
+        `title: ${JSON.stringify(title)}`,
+        `description: ${JSON.stringify(description)}`,
+        `source: ${source}`,
+        ...(lastUpdated ? [`last_updated: ${lastUpdated}`] : []),
+        "",
+        body,
+      ].join("\n"));
 
-      // Docusaurus keys `docs` by doc id, so `Object.entries` yields an
-      // alphabetical-by-id order. That buries "Getting Started" (the first
-      // thing a coding agent reads) below entries like `config/*` and
-      // `reference/*`. Instead, follow the sidebar order so the reading order
-      // matches what humans and agents see in the navigation.
-      type SidebarItem = {
-        type?: string;
-        href?: string;
-        docId?: string;
-        items?: SidebarItem[];
-      };
-      const docsSidebars = (versionProps.docsSidebars ?? {}) as Record<
-        string,
-        SidebarItem[]
-      >;
-
-      // Resolve a sidebar item to a doc-record key (doc id) when it points at a
-      // doc. Leaf links expose `docId` directly; category index links only
-      // expose a permalink via `href` (e.g. "/config"), so derive the doc id
-      // from it (e.g. "config/index" or "config").
-      const resolveDocId = (item: SidebarItem): string | undefined => {
-        if (typeof item.docId === "string" && item.docId in currentVersionDocsRoutes) {
-          return item.docId;
-        }
-        if (typeof item.href === "string") {
-          const slug = item.href.replace(/^\/+/, "").replace(/\/+$/, "");
-          for (const candidate of [`${slug}/index`, slug || "index"]) {
-            if (candidate in currentVersionDocsRoutes) {
-              return candidate;
-            }
-          }
-        }
-        return undefined;
-      };
-
-      const orderedPaths: string[] = [];
-      const seen = new Set<string>();
-      const collectSidebarLinks = (items: SidebarItem[] | undefined) => {
-        if (!items) return;
-        for (const item of items) {
-          const docId = resolveDocId(item);
-          if (docId && !seen.has(docId)) {
-            seen.add(docId);
-            orderedPaths.push(docId);
-          }
-          if (item.items) {
-            collectSidebarLinks(item.items);
-          }
-        }
-      };
-      for (const sidebarItems of Object.values(docsSidebars)) {
-        collectSidebarLinks(sidebarItems);
-      }
-
-      // Order the records by sidebar order, then append any docs that are not
-      // referenced by a sidebar (sorted by id) so nothing is dropped.
-      const orderedEntries: [string, Record<string, unknown>][] = [
-        ...orderedPaths.map(
-          (p) => [p, currentVersionDocsRoutes[p]] as [string, Record<string, unknown>]
+      await Promise.all([
+        fs.writeFile(
+          path.join(outDir, "llms.txt"),
+          `# ${siteConfig.title}\n\n> Full documentation: [llms-full.txt](${corpusUrl})\n\n## Docs\n\n${index.join("\n")}\n`,
         ),
-        ...Object.entries(currentVersionDocsRoutes)
-          .filter(([p]) => !seen.has(p))
-          .sort(([a], [b]) => a.localeCompare(b)),
-      ];
-
-      // for every single docs route we now parse a path (which is the key) and a title
-      const docsRecords = orderedEntries.map(([path, record]) => {
-        const permalink = permalinkById.get(path);
-        const url = permalink ? `${siteConfig.url}${permalink}` : path;
-        return `- [${record.title}](${url}): ${record.description}`;
-      });
-
-      // Build up llms.txt file
-      const llmsTxt = `# ${context.siteConfig.title}\n\n## Docs\n\n${docsRecords.join("\n")}`;
-
-      // Write llms.txt file
-      const llmsTxtPath = path.join(outDir, "llms.txt");
-      await fs.promises.writeFile(llmsTxtPath, llmsTxt);
+        fs.writeFile(path.join(outDir, "llms-full.txt"), `${corpus.join("\n\n")}\n`),
+      ]);
     },
   };
-};
-
-export default llmsTxtPlugin;
+}
